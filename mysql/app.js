@@ -30,6 +30,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(cors());
 
 app.use(express.static(path.join(__dirname, "../public")));
 app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
@@ -58,32 +60,38 @@ console.log("Connected to MySQL successfully!");
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../public/create.html"));
 });
+import cors from "cors";
+import dotenv from "dotenv";
+import { askAgora } from "./agoraai.js";
+dotenv.config();
+
 app.post("/submit", upload.single("evidence"), async (req, res) => {
   const { email, complain_details } = req.body;
   let { complain_category } = req.body;
   let evidenceFile = req.file ? req.file.filename : null;
 
-  
   if (!email || !complain_details) {
     return res.send("❌ Email and complaint details are required.");
   }
-
-
   if (!complain_category) complain_category = null;
 
   try {
     const complain_id = uuidv4();
     const status = "Received";
     const now = new Date();
-    const incident_date = now.toISOString().slice(0, 10);     
-    const incident_time = now.toISOString().slice(11, 19); 
+    const incident_date = now.toISOString().slice(0, 10);
+    const incident_time = now.toISOString().slice(11, 19);
+    const aiResult = await askAgora(complain_details);
+const aiResponseText = aiResult?.choices?.[0]?.message?.content || "AI could not analyze complaint.";
 
+const summary = aiResponseText;
+const urgency = "low"; // Just keep default for now
+    // Insert into database
     const sql = `
       INSERT INTO complaintable
-      (complain_id, complain_category, complain_detalis, email, evidence, status,incident_date,incident_time)
-      VALUES (?, ?, ?, ?, ?, ?,?,?)
+      (complain_id, complain_category, complain_detalis, email, evidence, status, urgency, incident_date, incident_time)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-
     await mysql_db.execute(sql, [
       complain_id,
       complain_category,
@@ -91,20 +99,42 @@ app.post("/submit", upload.single("evidence"), async (req, res) => {
       email,
       evidenceFile,
       status,
+      urgency,
       incident_date,
       incident_time,
     ]);
 
     console.log("✅ Complaint saved successfully!");
-    res.send("Complaint submitted successfully!");
+    res.json({
+      message: "Complaint submitted successfully!",
+      urgency,
+      summary,
+    });
   } catch (err) {
     console.error("❌ Error inserting data:", err);
-    res.send("❌ Error while saving complaint. Check backend console.");
+    res.status(500).send("❌ Error while saving complaint. Check backend console.");
+  }
+});
+//end
+app.post("/submit-complaint", async (req, res) => {
+  try {
+    const { complaint_text } = req.body;
+
+    // Send complaint to Agora AI
+    const aiResult = await analyzeComplaint(complaint_text);
+
+    res.json({
+      message: "Complaint received successfully!",
+      aiAnalysis: aiResult, // urgency, summary, etc.
+    });
+  } catch (error) {
+    console.error("Error analyzing complaint:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // Start server
-const PORT = 3000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server started on http://localhost:${PORT}`);
+   console.log(`🚀 Server started on http://localhost:${PORT}`);
 });
